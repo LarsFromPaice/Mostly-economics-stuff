@@ -1,0 +1,199 @@
+import pygame
+import random
+
+# Initialize Pygame
+pygame.init()
+
+# Screen dimensions
+WIDTH, HEIGHT = 800, 600
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("Killer Dots Game")
+
+# Colors
+WHITE = (255, 255, 255)
+RED = (255, 0, 0)
+BLUE = (0, 0, 255)
+BLACK = (0, 0, 0)
+
+# Dot settings
+PLAYER_RADIUS = 10
+KILLER_RADIUS = 10
+BULLET_RADIUS = 5
+MAX_KILLER_DOTS = 10
+
+# Player settings
+player_speed = 5
+player_lives = 5
+player_score = 0
+WIN_SCORE = 50000
+
+# Bullet settings
+bullet_speed = 7
+
+# Create player
+player = pygame.Rect(WIDTH // 2, HEIGHT - 30, PLAYER_RADIUS * 2, PLAYER_RADIUS * 2)
+
+# List for bullets
+bullets = []
+
+# Create initial killer dots
+killer_dots = [
+    pygame.Rect(random.randint(0, WIDTH - KILLER_RADIUS * 2), random.randint(0, HEIGHT - KILLER_RADIUS * 2), KILLER_RADIUS * 2, KILLER_RADIUS * 2),
+    pygame.Rect(random.randint(0, WIDTH - KILLER_RADIUS * 2), random.randint(0, HEIGHT - KILLER_RADIUS * 2), KILLER_RADIUS * 2, KILLER_RADIUS * 2)
+]
+
+# Colors for killer dots
+killer_colors = [RED, RED]
+
+# Velocity for killer dots
+killer_velocities = [(3, 3), (-3, -3)]
+round_number = 1
+
+# Function to get a random color
+def get_random_color():
+    return random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)
+
+# Function to pause until key is pressed
+def pause_until_key():
+    paused = True
+    while paused:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                exit()
+            if event.type == pygame.KEYDOWN:
+                paused = False
+        pygame.time.wait(100)
+
+# Game loop
+running = True
+game_over = False
+you_win = False
+clock = pygame.time.Clock()
+
+while running:
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+    
+    if game_over:
+        screen.fill(WHITE)
+        font = pygame.font.Font(None, 72)
+        text = font.render('Game Over', True, BLACK)
+        text_rect = text.get_rect(center=(WIDTH // 2, HEIGHT // 2))
+        screen.blit(text, text_rect)
+        pygame.display.flip()
+        pygame.time.wait(3000)  # Wait for 3 seconds before closing
+        running = False
+        continue
+
+    if you_win:
+        screen.fill(WHITE)
+        font = pygame.font.Font(None, 72)
+        text = font.render('You Win!', True, BLACK)
+        text_rect = text.get_rect(center=(WIDTH // 2, HEIGHT // 2))
+        screen.blit(text, text_rect)
+        pygame.display.flip()
+        pygame.time.wait(3000)  # Wait for 3 seconds before closing
+        running = False
+        continue
+    
+    # Get keys
+    keys = pygame.key.get_pressed()
+    
+    # Player movement
+    if keys[pygame.K_LEFT] and player.left > 0:
+        player.move_ip(-player_speed, 0)
+    if keys[pygame.K_RIGHT] and player.right < WIDTH:
+        player.move_ip(player_speed, 0)
+    if keys[pygame.K_UP] and player.top > 0:
+        player.move_ip(0, -player_speed)
+    if keys[pygame.K_DOWN] and player.bottom < HEIGHT:
+        player.move_ip(0, player_speed)
+    
+    # Shoot bullet
+    if keys[pygame.K_SPACE]:
+        bullets.append(pygame.Rect(player.centerx - BULLET_RADIUS, player.top - BULLET_RADIUS * 2, BULLET_RADIUS * 2, BULLET_RADIUS * 2))
+    
+    # Move bullets
+    for bullet in bullets[:]:
+        bullet.move_ip(0, -bullet_speed)
+        if bullet.bottom < 0:
+            bullets.remove(bullet)
+    
+    # Move killer dots
+    for i, dot in enumerate(killer_dots):
+        dot.move_ip(*killer_velocities[i])
+        if dot.left <= 0 or dot.right >= WIDTH:
+            killer_velocities[i] = (-killer_velocities[i][0], killer_velocities[i][1])
+        if dot.top <= 0 or dot.bottom >= HEIGHT:
+            killer_velocities[i] = (killer_velocities[i][0], -killer_velocities[i][1])
+    
+    # Check collisions between player and killer dots
+    for dot in killer_dots:
+        if player.colliderect(dot):
+            player_lives -= 1
+            player.topleft = (WIDTH // 2, HEIGHT - 30)  # Reset player position
+            if player_lives == 0:
+                game_over = True
+            else:
+                pause_until_key()
+    
+    # Check collisions between bullets and killer dots
+    for bullet in bullets[:]:
+        for dot in killer_dots[:]:
+            if bullet.colliderect(dot):
+                bullets.remove(bullet)
+                index = killer_dots.index(dot)
+                killer_colors.pop(index)
+                killer_dots.remove(dot)
+                player_score += 666
+                for j in range(len(killer_velocities)):
+                    killer_velocities[j] = (killer_velocities[j][0] * 1.1, killer_velocities[j][1] * 1.1)  # Increase speed of remaining dots
+                break
+    
+    # Check collisions between killer dots
+    for i in range(len(killer_dots)):
+        for j in range(i + 1, len(killer_dots)):
+            if killer_dots[i].colliderect(killer_dots[j]) and len(killer_dots) < MAX_KILLER_DOTS:
+                new_dot = pygame.Rect(random.randint(0, WIDTH - KILLER_RADIUS * 2), random.randint(0, HEIGHT - KILLER_RADIUS * 2), KILLER_RADIUS * 2, KILLER_RADIUS * 2)
+                killer_dots.append(new_dot)
+                killer_colors.append(get_random_color())
+                speed = 3 + round_number  # Increase speed with each round
+                killer_velocities.append((random.choice([-speed, speed]), random.choice([-speed, speed])))
+    
+    # Check if all killer dots are destroyed
+    if not killer_dots:
+        round_number += 1
+        player_score += 1543
+        for _ in range(2):
+            if len(killer_dots) < MAX_KILLER_DOTS:
+                new_dot = pygame.Rect(random.randint(0, WIDTH - KILLER_RADIUS * 2), random.randint(0, HEIGHT - KILLER_RADIUS * 2), KILLER_RADIUS * 2, KILLER_RADIUS * 2)
+                killer_dots.append(new_dot)
+                killer_colors.append(get_random_color())
+                speed = 3 + round_number  # Increase speed with each round
+                killer_velocities.append((random.choice([-speed, speed]), random.choice([-speed, speed])))
+    
+    # Check if player wins
+    if player_score >= WIN_SCORE:
+        you_win = True
+
+    # Draw everything
+    screen.fill(WHITE)
+    pygame.draw.ellipse(screen, BLUE, player)
+    for i, dot in enumerate(killer_dots):
+        pygame.draw.ellipse(screen, killer_colors[i], dot)
+    for bullet in bullets:
+        pygame.draw.ellipse(screen, BLACK, bullet)
+    
+    # Display lives and score
+    font = pygame.font.Font(None, 36)
+    lives_text = font.render(f'Lives: {player_lives}', True, BLACK)
+    score_text = font.render(f'Score: {player_score}', True, BLACK)
+    screen.blit(lives_text, (10, 10))
+    screen.blit(score_text, (10, 50))
+    
+    pygame.display.flip()
+    clock.tick(60)
+
+pygame.quit()

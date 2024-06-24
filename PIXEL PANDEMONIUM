@@ -1,0 +1,201 @@
+import pygame
+import random
+import time
+
+# Initialize Pygame
+pygame.init()
+
+# Screen size
+WIDTH = 800
+HEIGHT = 600
+
+# Colors
+BLACK = (0, 0, 0)
+WHITE = (255, 255, 255)
+RED = (255, 0, 0)
+GREEN = (0, 255, 0)
+NEON_BLUE = (0, 255, 255)
+
+# Create screen
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("PIXEL PANDEMONIUM")
+
+# Tank (player)
+tank_width = 40
+tank_height = 40
+tank_x = WIDTH // 2 - tank_width // 2
+tank_y = HEIGHT - tank_height - 10
+tank_speed = 5
+
+# Bullet
+bullet_radius = 5
+bullets = []
+bullet_speed = 7
+
+# Enemies
+enemy_width = 30
+enemy_height = 30
+enemies = []
+
+# Bars
+bar_width = 100
+bar_height = 10
+bars = [{"x": WIDTH // 2 - bar_width // 2, "y": 50, "direction": 1}]
+bar_speed = 3
+bar_vertical_speed = 0.5
+last_bar_time = time.time()
+
+# Game variables
+score = 0
+lives = 3
+shoot_delay = 0
+
+def draw_text(text, size, x, y, color):
+    font = pygame.font.Font(None, size)
+    text_surface = font.render(text, True, color)
+    text_rect = text_surface.get_rect()
+    text_rect.center = (x, y)
+    screen.blit(text_surface, text_rect)
+
+# Game state
+game_state = "title"
+
+# Main game loop
+running = True
+clock = pygame.time.Clock()
+
+while running:
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+        if event.type == pygame.KEYDOWN:
+            if game_state == "title" and event.key == pygame.K_SPACE:
+                game_state = "game"
+
+    if game_state == "title":
+        # Title screen
+        screen.fill(BLACK)
+        draw_text("PIXEL PANDEMONIUM", 64, WIDTH // 2, HEIGHT // 3, NEON_BLUE)
+        draw_text("PRESS SPACE TO START", 32, WIDTH // 2, HEIGHT * 2 // 3, WHITE)
+        draw_text("© 1986 RETRO ARCADE", 24, WIDTH // 2, HEIGHT - 30, WHITE)
+    elif game_state == "game":
+        # Move tank
+        keys = pygame.key.get_pressed()
+        if keys[pygame.K_LEFT] and tank_x > 0:
+            tank_x -= tank_speed
+        if keys[pygame.K_RIGHT] and tank_x < WIDTH - tank_width:
+            tank_x += tank_speed
+        if keys[pygame.K_UP] and tank_y > HEIGHT // 2:
+            tank_y -= tank_speed
+        if keys[pygame.K_DOWN] and tank_y < HEIGHT - tank_height:
+            tank_y += tank_speed
+
+        # Shoot
+        if keys[pygame.K_SPACE] and shoot_delay == 0:
+            bullets.append({"x": tank_x + tank_width // 2, "y": tank_y, "direction": -1})
+            shoot_delay = 10
+
+        if shoot_delay > 0:
+            shoot_delay -= 1
+
+        # Move bullets
+        for bullet in bullets[:]:
+            bullet["y"] += bullet["direction"] * bullet_speed
+            if bullet["y"] < 0 or bullet["y"] > HEIGHT:
+                bullets.remove(bullet)
+
+        # Move and add bars
+        now = time.time()
+        if now - last_bar_time > 5:
+            bars.append({"x": random.randint(0, WIDTH - bar_width), "y": 0, "direction": 1})
+            last_bar_time = now
+
+        for bar in bars[:]:
+            bar["x"] += bar["direction"] * bar_speed
+            bar["y"] += bar_vertical_speed
+
+            if bar["x"] <= 0 or bar["x"] >= WIDTH - bar_width:
+                bar["direction"] *= -1
+
+            if bar["y"] > HEIGHT:
+                bars.remove(bar)
+
+            # Check collision between bullets and bar
+            for bullet in bullets[:]:
+                if (bar["x"] < bullet["x"] < bar["x"] + bar_width and
+                    bar["y"] < bullet["y"] < bar["y"] + bar_height):
+                    bullet["direction"] *= -1
+
+        # Add enemies
+        if len(enemies) < 5 and random.randint(1, 100) == 1:
+            enemy_x = random.randint(0, WIDTH - enemy_width)
+            enemies.append([enemy_x, 100])
+
+        # Move enemies and check collision
+        for enemy in enemies[:]:
+            enemy[1] += 2
+            if enemy[1] > HEIGHT:
+                enemies.remove(enemy)
+                lives -= 1
+            
+            # Collision with tank
+            if (tank_x < enemy[0] + enemy_width and
+                tank_x + tank_width > enemy[0] and
+                tank_y < enemy[1] + enemy_height and
+                tank_y + tank_height > enemy[1]):
+                enemies.remove(enemy)
+                lives -= 1
+
+        # Check bullet collision with enemies
+        for bullet in bullets[:]:
+            for enemy in enemies[:]:
+                if (enemy[0] < bullet["x"] < enemy[0] + enemy_width and
+                    enemy[1] < bullet["y"] < enemy[1] + enemy_height):
+                    bullets.remove(bullet)
+                    enemies.remove(enemy)
+                    score += 10
+                    break
+
+        # Game Over check
+        if lives <= 0:
+            game_state = "game_over"
+
+        # Draw everything
+        screen.fill(BLACK)
+        pygame.draw.rect(screen, GREEN, (tank_x, tank_y, tank_width, tank_height))
+        for bar in bars:
+            pygame.draw.rect(screen, WHITE, (bar["x"], bar["y"], bar_width, bar_height))
+        for enemy in enemies:
+            pygame.draw.rect(screen, RED, (enemy[0], enemy[1], enemy_width, enemy_height))
+        for bullet in bullets:
+            pygame.draw.circle(screen, WHITE, (int(bullet["x"]), int(bullet["y"])), bullet_radius)
+
+        # Draw game name, score and lives
+        draw_text("PIXEL PANDEMONIUM", 24, 100, 20, NEON_BLUE)
+        draw_text(f"SCORE: {score}", 24, WIDTH - 100, 20, WHITE)
+        draw_text(f"LIVES: {lives}", 24, WIDTH - 100, 50, WHITE)
+
+    elif game_state == "game_over":
+        screen.fill(BLACK)
+        draw_text("GAME OVER", 64, WIDTH // 2, HEIGHT // 3, RED)
+        draw_text(f"FINAL SCORE: {score}", 32, WIDTH // 2, HEIGHT // 2, WHITE)
+        draw_text("PRESS SPACE TO PLAY AGAIN", 32, WIDTH // 2, HEIGHT * 2 // 3, WHITE)
+        draw_text("INSERT COIN", 24, WIDTH // 2, HEIGHT - 30, NEON_BLUE)
+        
+        keys = pygame.key.get_pressed()
+        if keys[pygame.K_SPACE]:
+            # Reset game variables
+            score = 0
+            lives = 3
+            tank_x = WIDTH // 2 - tank_width // 2
+            tank_y = HEIGHT - tank_height - 10
+            enemies.clear()
+            bullets.clear()
+            bars = [{"x": WIDTH // 2 - bar_width // 2, "y": 50, "direction": 1}]
+            last_bar_time = time.time()
+            game_state = "game"
+
+    pygame.display.flip()
+    clock.tick(60)
+
+pygame.quit()

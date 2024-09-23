@@ -1,0 +1,158 @@
+import numpy as np
+import random
+import matplotlib.pyplot as plt
+from sklearn.linear_model import LinearRegression
+
+# Parameters for the simulation
+MAX_EPISODES = 500
+MAX_STEPS = 100
+LEARNING_RATE = 0.1
+DISCOUNT_FACTOR = 0.95
+EPSILON = 0.1
+
+# Theoretically correct price and quantity
+theoretical_price = 60
+theoretical_quantity = 20
+
+# Cost structure
+def marginal_cost(q):
+    return 20  # Constant marginal cost
+
+# Demand curve (where P = 100 - 2Q)
+def demand_curve(p):
+    return (100 - p) / 2  # Q = (100 - P) / 2
+
+# Profit function
+def profit(p, q):
+    return p * q - marginal_cost(q) * q
+
+# Q-learning agent (Monopolist)
+class MonopolistAgent:
+    def __init__(self, learning_rate, discount_factor, epsilon):
+        self.q_table = {}
+        self.learning_rate = learning_rate
+        self.discount_factor = discount_factor
+        self.epsilon = epsilon
+        self.prices = np.linspace(20, 100, 20)  # Discrete prices the agent can choose
+    
+    def choose_action(self, state):
+        if random.uniform(0, 1) < self.epsilon:  # Epsilon-greedy strategy
+            return random.choice(self.prices)
+        if state not in self.q_table:
+            return random.choice(self.prices)
+        return max(self.q_table[state], key=self.q_table[state].get)
+
+    def update_q_value(self, state, action, reward, next_state):
+        if state not in self.q_table:
+            self.q_table[state] = {a: 0 for a in self.prices}
+        if next_state not in self.q_table:
+            self.q_table[next_state] = {a: 0 for a in self.prices}
+        
+        current_q = self.q_table[state][action]
+        max_future_q = max(self.q_table[next_state].values())
+        
+        new_q = current_q + self.learning_rate * (reward + self.discount_factor * max_future_q - current_q)
+        self.q_table[state][action] = new_q
+
+# Simulation loop with fixed demand curve and monopolist AI
+def simulate_with_fixed_demand():
+    monopolist = MonopolistAgent(LEARNING_RATE, DISCOUNT_FACTOR, EPSILON)
+    
+    prices_over_time = []
+    quantities_over_time = []
+    
+    for episode in range(MAX_EPISODES):
+        state = "start"
+        total_price = 0
+        total_quantity = 0
+
+        for step in range(MAX_STEPS):
+            price = monopolist.choose_action(state)
+            quantity = demand_curve(price)  # Demand curve given by Q = (100 - P) / 2
+
+            # Update monopolist's profit based on this demand
+            current_profit = profit(price, quantity)
+            monopolist.update_q_value(state, price, current_profit, "next")
+
+            total_price += price
+            total_quantity += quantity
+
+            state = "next"
+        
+        avg_price = total_price / MAX_STEPS
+        avg_quantity = total_quantity / MAX_STEPS
+
+        prices_over_time.append(avg_price)
+        quantities_over_time.append(avg_quantity)
+
+    return prices_over_time, quantities_over_time
+
+# Function to estimate the demand curve
+def estimate_demand_curve(prices, quantities):
+    # Reshape data for regression
+    prices = np.array(prices).reshape(-1, 1)
+    quantities = np.array(quantities).reshape(-1, 1)
+    
+    # Create a linear regression model
+    model = LinearRegression()
+    model.fit(quantities, prices)  # We fit prices as a function of quantities
+    
+    # Extract the slope and intercept
+    slope = model.coef_[0][0]
+    intercept = model.intercept_[0]
+    
+    return slope, intercept
+
+# Function to plot the estimated demand curve
+def plot_estimated_demand_curve(prices_over_time, quantities_over_time):
+    # Estimate the demand curve from the simulation
+    slope, intercept = estimate_demand_curve(prices_over_time, quantities_over_time)
+    
+    # Estimated prices based on the linear regression
+    estimated_prices = [slope * q + intercept for q in quantities_over_time]
+    
+    # Plot the estimated demand curves and observed prices/quantities
+    plt.figure(figsize=(10, 6))
+    plt.plot(quantities_over_time, estimated_prices, label="Estimated demand curve", linestyle="-", color="blue")
+    plt.scatter(quantities_over_time, prices_over_time, label="Observed prices/quantities", alpha=0.5)
+    plt.xlabel("Quantity")
+    plt.ylabel("Price")
+    plt.title("Estimated Demand Curve from Simulation")
+    plt.legend()
+    plt.show()
+
+# Plot quantity and prices over time along with theoretical values
+def plot_quantity_and_price_with_theoretical(prices_over_time, quantities_over_time, max_episodes=500):
+    # Limit data to the first 500 episodes
+    prices_over_time = prices_over_time[:max_episodes]
+    quantities_over_time = quantities_over_time[:max_episodes]
+
+    plt.figure(figsize=(12, 6))
+
+    # Plot price development over time
+    plt.subplot(2, 1, 1)
+    plt.plot(prices_over_time, label='Price (AI agent)', color='blue')
+    plt.axhline(y=theoretical_price, color='red', linestyle='--', label='Theoretical price')
+    plt.xlabel('Episodes')
+    plt.ylabel('Price')
+    plt.title('Price Development over Time')
+    plt.legend()
+
+    # Plot quantity development over time
+    plt.subplot(2, 1, 2)
+    plt.plot(quantities_over_time, label='Quantity (AI agent)', color='green')
+    plt.axhline(y=theoretical_quantity, color='red', linestyle='--', label='Theoretical quantity')
+    plt.xlabel('Episodes')
+    plt.ylabel('Quantity')
+    plt.title('Quantity Development over Time')
+    plt.legend()
+
+    plt.tight_layout()
+    plt.show()
+
+# Run the simulation and plot results with theoretical prices and quantities
+prices_over_time, quantities_over_time = simulate_with_fixed_demand()
+plot_quantity_and_price_with_theoretical(prices_over_time, quantities_over_time)
+
+# Plot estimated demand curve based on the simulated data
+plot_estimated_demand_curve(prices_over_time, quantities_over_time)

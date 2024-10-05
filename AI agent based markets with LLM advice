@@ -1,0 +1,411 @@
+import subprocess
+import sys
+import numpy as np
+import random
+import matplotlib.pyplot as plt
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
+import os
+import warnings
+
+# Suppress specific warnings
+warnings.filterwarnings("ignore", category=FutureWarning, module="transformers.tokenization_utils_base")
+
+# Function to install packages
+def install(package):
+    subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+
+# Install required packages
+required_packages = [
+    "numpy",
+    "matplotlib",
+    "torch",
+    "transformers"
+]
+
+for package in required_packages:
+    try:
+        install(package)
+    except Exception as e:
+        print(f"Error installing package {package}: {e}")
+
+# Set random seeds for reproducibility
+np.random.seed(42)
+random.seed(42)
+torch.manual_seed(42)
+
+# Load the tokenizer and model, and set the pad_token to eos_token
+tokenizer = AutoTokenizer.from_pretrained('distilgpt2')
+model = AutoModelForCausalLM.from_pretrained('distilgpt2')
+tokenizer.pad_token = tokenizer.eos_token if tokenizer.eos_token is not None else tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+
+# Initialize Hugging Face Transformers text generation pipeline
+generator = pipeline('text-generation', model=model, tokenizer=tokenizer, pad_token_id=tokenizer.eos_token_id, device=0 if torch.cuda.is_available() else -1)
+
+advice_cache = {}
+
+# Set frequency for LLM advice (reduce to improve performance)
+advice_frequency = 50
+
+# Decay rate for epsilon (exploration rate)
+initial_epsilon = 0.5
+epsilon_decay = 0.99
+min_epsilon = 0.1
+
+# Function to generate LLM advice
+def chatgpt_advice(agent_type, feedback, reservation_price):
+    global advice_cache
+    if round_num % advice_frequency == 0 or agent_type not in advice_cache:
+        prompt = f"A {agent_type} had a '{feedback}' transaction. Their reservation price is {reservation_price:.2f} euros. What should they do to adjust their price in the next round?"
+        try:
+            response = generator(prompt, max_length=50, num_return_sequences=1, truncation=True, clean_up_tokenization_spaces=True)
+            advice_text = response[0]['generated_text'].strip().lower()
+            advice_log.append(f"{agent_type} received advice: {advice_text} after {feedback} transaction.")
+            advice_cache[agent_type] = advice_text
+        except Exception as e:
+            print(f"An error occurred while generating advice: {e}")
+            advice_cache[agent_type] = "no change"
+
+    if "increase" in advice_cache[agent_type]:
+        return random.uniform(1.1, 1.2)
+    elif "decrease" in advice_cache[agent_type]:
+        return random.uniform(0.85, 0.95)
+    else:
+        return random.uniform(0.95, 1.05)
+
+# Simulation settings
+num_buyers = 10
+num_sellers = 10
+num_rounds = 500
+
+# Buyers and sellers preferences
+buyers_utility = np.random.uniform(100, 200, num_buyers)
+sellers_cost = np.random.uniform(50, 150, num_sellers)
+
+# Define state and action space for Q-learning
+state_size = 3  # Example: utility, reservation price, bid/ask price
+action_size = 3  # Actions: Increase, Decrease, Maintain
+
+gamma = 0.9  # Discount factor
+learning_rate = 0.001
+
+# Normalization function for state input
+def normalize_state(state):
+    return state / torch.max(state)
+
+# Q-Network for RL
+class QNetwork(nn.Module):
+    def __init__(self, state_size, action_size):
+        super(QNetwork, self).__init__()
+        self.fc1 = nn.Linear(state_size, 64)
+        self.fc2 = nn.Linear(64, 64)
+        self.fc3 = nn.Linear(64, action_size)
+
+    def forward(self, state):
+        x = F.relu(self.fc1(state))
+        x = F.relu(self.fc2(x))
+        return self.fc3(x)
+
+q_network_advice = QNetwork(state_size, action_size)
+q_network_no_advice = QNetwork(state_size, action_size)
+optimizer_advice = optim.Adam(q_network_advice.parameters(), lr=learning_rate)
+optimizer_no_advice = optim.Adam(q_network_no_advice.parameters(), lr=learning_rate)
+
+# Event log for advice
+advice_log = []
+
+# Parallel Simulations: LLM Advisor vs No Advisor
+class Buyer:
+    def __init__(self, utility):
+        self.utility = utility
+        self.reservation_price = random.uniform(3.0, 7.5)  # Individual reservation price around 5 euros
+        self.bid_price = max(self.reservation_price, utility * random.uniform(0.6, 1.0))
+
+    def get_state(self):
+        return normalize_state(torch.tensor([self.utility, self.reservation_price, self.bid_price], dtype=torch.float32))
+
+    def update_bid_rl(self, action):
+        if action == 0:  # Increase price
+            self.bid_price *= random.uniform(1.05, 1.1)
+        elif action == 1:  # Decrease price
+            self.bid_price *= random.uniform(0.9, 0.95)
+        # Ensure bid price is not below reservation price and not unreasonably high
+        self.bid_price = max(self.bid_price, self.reservation_price)
+        self.bid_price = min(self.bid_price, self.reservation_price * 2)
+
+class Seller:
+    def __init__(self, cost):
+        self.cost = cost
+        self.reservation_price = random.uniform(3.0, 7.5)  # Individual reservation price around 5 euros
+        self.ask_price = max(self.reservation_price, cost * random.uniform(1.1, 1.5))
+
+    def get_state(self):
+        return normalize_state(torch.tensor([self.cost, self.reservation_price, self.ask_price], dtype=torch.float32))
+
+    def update_price_rl(self, action):
+        if action == 0:  # Increase price
+            self.ask_price *= random.uniform(1.05, 1.1)
+        elif action == 1:  # Decrease price
+            self.ask_price *= random.uniform(0.9, 0.95)
+        # Ensure ask price is not below reservation price and not unreasonably high
+        self.ask_price = max(self.ask_price, self.reservation_price)
+        self.ask_price = min(self.ask_price, self.reservation_price * 2)
+
+# Initialize buyers and sellers for both simulations
+buyers_advice = [Buyer(utility) for utility in buyers_utility]
+sellers_advice = [Seller(cost) for cost in sellers_cost]
+
+buyers_no_advice = [Buyer(utility) for utility in buyers_utility]
+sellers_no_advice = [Seller(cost) for cost in sellers_cost]
+
+# Event log and statistics for both simulations
+event_log_advice = []
+event_log_no_advice = []
+transactions_per_round_advice = []
+transactions_per_round_no_advice = []
+
+profits_over_time_advice = []
+profits_over_time_no_advice = []
+utilities_over_time_advice = []
+utilities_over_time_no_advice = []
+
+# Tracking bid and ask prices
+overall_bid_prices_advice = []
+overall_ask_prices_advice = []
+overall_bid_prices_no_advice = []
+overall_ask_prices_no_advice = []
+
+# Tracking bid-ask spread
+bid_ask_spread_advice = []
+bid_ask_spread_no_advice = []
+
+# Tracking epsilon decay
+epsilon_values = []
+
+# Simulation over multiple rounds
+epsilon = initial_epsilon
+for round_num in range(num_rounds):
+    # Only update graphs every 50 rounds to reduce overhead
+    if round_num % 50 == 0 and round_num != 0:
+        print(f"Round {round_num} completed, updating graphs...")
+
+    random.shuffle(buyers_advice)
+    random.shuffle(sellers_advice)
+    random.shuffle(buyers_no_advice)
+    random.shuffle(sellers_no_advice)
+
+    transactions_advice = 0
+    transactions_no_advice = 0
+    round_profit_advice = 0
+    round_profit_no_advice = 0
+    round_utility_advice = 0
+    round_utility_no_advice = 0
+
+    bid_prices_round_advice = []
+    ask_prices_round_advice = []
+    bid_prices_round_no_advice = []
+    ask_prices_round_no_advice = []
+
+    # Simulation with LLM advice and RL
+    for buyer, seller in zip(buyers_advice, sellers_advice):
+        state_buyer = buyer.get_state()
+        state_seller = seller.get_state()
+
+        # Select action using epsilon-greedy policy
+        if random.random() > epsilon:
+            with torch.no_grad():
+                action_buyer = q_network_advice(state_buyer).argmax().item()
+                action_seller = q_network_advice(state_seller).argmax().item()
+        else:
+            action_buyer = random.choice(range(action_size))
+            action_seller = random.choice(range(action_size))
+
+        # Update bid/ask prices based on action
+        buyer.update_bid_rl(action_buyer)
+        seller.update_price_rl(action_seller)
+
+        bid_prices_round_advice.append(buyer.bid_price)
+        ask_prices_round_advice.append(seller.ask_price)
+
+        # Determine if a transaction occurs
+        if buyer.bid_price >= seller.ask_price:
+            transactions_advice += 1
+            profit = max(0, buyer.utility - seller.cost)
+            utility = max(0, buyer.utility - buyer.bid_price)
+            round_profit_advice += profit
+            round_utility_advice += utility
+
+            # Reward for successful transaction
+            reward_buyer = profit
+            reward_seller = profit
+        else:
+            # Penalty for failed transaction
+            reward_buyer = -1
+            reward_seller = -1
+
+        # Update Q-network every 10 rounds to reduce overhead
+        if round_num % 10 == 0:
+            next_state_buyer = buyer.get_state()
+            next_state_seller = seller.get_state()
+
+            target_buyer = reward_buyer + gamma * q_network_advice(next_state_buyer).max().item()
+            target_seller = reward_seller + gamma * q_network_advice(next_state_seller).max().item()
+
+            prediction_buyer = q_network_advice(state_buyer)[action_buyer]
+            prediction_seller = q_network_advice(state_seller)[action_seller]
+
+            loss_buyer = F.mse_loss(prediction_buyer, torch.tensor(target_buyer, dtype=torch.float32))
+            loss_seller = F.mse_loss(prediction_seller, torch.tensor(target_seller, dtype=torch.float32))
+
+            optimizer_advice.zero_grad()
+            (loss_buyer + loss_seller).backward()
+            optimizer_advice.step()
+
+    transactions_per_round_advice.append(transactions_advice)
+    profits_over_time_advice.append(round_profit_advice)
+    utilities_over_time_advice.append(round_utility_advice)
+    overall_bid_prices_advice.append(np.mean(bid_prices_round_advice))
+    overall_ask_prices_advice.append(np.mean(ask_prices_round_advice))
+    bid_ask_spread_advice.append(np.mean(np.array(ask_prices_round_advice) - np.array(bid_prices_round_advice)))
+
+    # Simulation without LLM advice and RL
+    for buyer, seller in zip(buyers_no_advice, sellers_no_advice):
+        state_buyer = buyer.get_state()
+        state_seller = seller.get_state()
+
+        # Select action using epsilon-greedy policy
+        if random.random() > epsilon:
+            with torch.no_grad():
+                action_buyer = q_network_no_advice(state_buyer).argmax().item()
+                action_seller = q_network_no_advice(state_seller).argmax().item()
+        else:
+            action_buyer = random.choice(range(action_size))
+            action_seller = random.choice(range(action_size))
+
+        # Update bid/ask prices based on action
+        buyer.update_bid_rl(action_buyer)
+        seller.update_price_rl(action_seller)
+
+        bid_prices_round_no_advice.append(buyer.bid_price)
+        ask_prices_round_no_advice.append(seller.ask_price)
+
+        # Determine if a transaction occurs
+        if buyer.bid_price >= seller.ask_price:
+            transactions_no_advice += 1
+            profit = max(0, buyer.utility - seller.cost)
+            utility = max(0, buyer.utility - buyer.bid_price)
+            round_profit_no_advice += profit
+            round_utility_no_advice += utility
+
+            # Reward for successful transaction
+            reward_buyer = profit
+            reward_seller = profit
+        else:
+            # Penalty for failed transaction
+            reward_buyer = -1
+            reward_seller = -1
+
+        # Update Q-network every 10 rounds to reduce overhead
+        if round_num % 10 == 0:
+            next_state_buyer = buyer.get_state()
+            next_state_seller = seller.get_state()
+
+            target_buyer = reward_buyer + gamma * q_network_no_advice(next_state_buyer).max().item()
+            target_seller = reward_seller + gamma * q_network_no_advice(next_state_seller).max().item()
+
+            prediction_buyer = q_network_no_advice(state_buyer)[action_buyer]
+            prediction_seller = q_network_no_advice(state_seller)[action_seller]
+
+            loss_buyer = F.mse_loss(prediction_buyer, torch.tensor(target_buyer, dtype=torch.float32))
+            loss_seller = F.mse_loss(prediction_seller, torch.tensor(target_seller, dtype=torch.float32))
+
+            optimizer_no_advice.zero_grad()
+            (loss_buyer + loss_seller).backward()
+            optimizer_no_advice.step()
+
+    transactions_per_round_no_advice.append(transactions_no_advice)
+    profits_over_time_no_advice.append(round_profit_no_advice)
+    utilities_over_time_no_advice.append(round_utility_no_advice)
+    overall_bid_prices_no_advice.append(np.mean(bid_prices_round_no_advice))
+    overall_ask_prices_no_advice.append(np.mean(ask_prices_round_no_advice))
+    bid_ask_spread_no_advice.append(np.mean(np.array(ask_prices_round_no_advice) - np.array(bid_prices_round_no_advice)))
+
+    # Update epsilon for exploration decay
+    epsilon = max(min_epsilon, epsilon * epsilon_decay)
+    epsilon_values.append(epsilon)
+
+    if (round_num + 1) % 100 == 0 or round_num == num_rounds - 1:
+        print(f"Round {round_num + 1} (with LLM): Number of successful transactions: {transactions_advice}")
+        print(f"Round {round_num + 1} (without LLM): Number of successful transactions: {transactions_no_advice}")
+
+print("Simulation complete!")
+
+# Plotting results
+plt.figure(figsize=(18, 15))
+
+# Plot transactions per round
+plt.subplot(3, 2, 1)
+plt.plot(transactions_per_round_advice, label="With LLM Advice", color='blue')
+plt.plot(transactions_per_round_no_advice, label="Without LLM Advice", color='red')
+plt.xlabel("Rounds")
+plt.ylabel("Number of Transactions")
+plt.title("Transactions per Round")
+plt.legend()
+plt.grid(True)
+
+# Plot profits over time
+plt.subplot(3, 2, 2)
+plt.plot(profits_over_time_advice, label="With LLM Advice", color='blue')
+plt.plot(profits_over_time_no_advice, label="Without LLM Advice", color='red')
+plt.xlabel("Rounds")
+plt.ylabel("Total Profit")
+plt.title("Profits Over Time")
+plt.legend()
+plt.grid(True)
+
+# Plot utilities over time
+plt.subplot(3, 2, 3)
+plt.plot(utilities_over_time_advice, label="With LLM Advice", color='blue')
+plt.plot(utilities_over_time_no_advice, label="Without LLM Advice", color='red')
+plt.xlabel("Rounds")
+plt.ylabel("Total Utility")
+plt.title("Utilities Over Time")
+plt.legend()
+plt.grid(True)
+
+# Plot average bid and ask prices
+plt.subplot(3, 2, 4)
+plt.plot(overall_bid_prices_advice, label="Average Bid Price (With LLM)", color='blue', linestyle='--')
+plt.plot(overall_ask_prices_advice, label="Average Ask Price (With LLM)", color='blue')
+plt.plot(overall_bid_prices_no_advice, label="Average Bid Price (Without LLM)", color='red', linestyle='--')
+plt.plot(overall_ask_prices_no_advice, label="Average Ask Price (Without LLM)", color='red')
+plt.xlabel("Rounds")
+plt.ylabel("Price")
+plt.title("Average Bid and Ask Prices Over Time")
+plt.legend()
+plt.grid(True)
+
+# Plot bid-ask spread over time
+plt.subplot(3, 2, 5)
+plt.plot(bid_ask_spread_advice, label="Bid-Ask Spread (With LLM)", color='blue')
+plt.plot(bid_ask_spread_no_advice, label="Bid-Ask Spread (Without LLM)", color='red')
+plt.xlabel("Rounds")
+plt.ylabel("Spread")
+plt.title("Bid-Ask Spread Over Time")
+plt.legend()
+plt.grid(True)
+
+# Plot epsilon decay over time
+plt.subplot(3, 2, 6)
+plt.plot(epsilon_values, label="Epsilon Decay", color='green')
+plt.xlabel("Rounds")
+plt.ylabel("Epsilon Value")
+plt.title("Epsilon Decay Over Time")
+plt.legend()
+plt.grid(True)
+
+plt.tight_layout()
+plt.show()
